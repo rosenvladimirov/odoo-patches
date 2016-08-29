@@ -1,0 +1,16 @@
+diff --git a/addons/account/account_invoice_view.xml b/addons/account/account_invoice_view.xml
+index 0a52580..d3f1061 100644
+--- a/addons/account/account_invoice_view.xml
++++ b/addons/account/account_invoice_view.xml
+@@ -228,6 +228,11 @@
+ 
+                                 <field name="residual" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                                 <field name="reconciled" invisible="1"/>
++
++                                <label for="amount_tax_credit" attrs="{'invisible':[('amount_tax_credit','=',0.0)]}"/>
++                                <field name="amount_tax_credit" nolabel="1" widget="monetary" options="{'currency_field': 'currency_id'}" attrs="{'invisible':[('amount_tax_credit','=',0.0)]}"/>
++                                <label for="amount_tax_payable" attrs="{'invisible':[('amount_tax_payable','=',0.0)]}"/>
++                                <field name="amount_tax_payable" nolabel="1" widget="monetary" options="{'currency_field': 'currency_id'}" attrs="{'invisible':[('amount_tax_payable','=',0.0)]}"/>
+                             </group>
+                             <div style="width: 50%%">
+                                 <field name="tax_line">

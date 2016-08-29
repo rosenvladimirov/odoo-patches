@@ -1,0 +1,16 @@
+diff --git a/addons/purchase/purchase_view.xml b/addons/purchase/purchase_view.xml
+index 87b07ef..12e9308 100644
+--- a/addons/purchase/purchase_view.xml
++++ b/addons/purchase/purchase_view.xml
+@@ -259,6 +259,11 @@
+                                         states="draft" string="(update)" type="object" class="oe_edit_only oe_link"/>
+                                 </div>
+                                 <field name="amount_total" nolabel="1" class="oe_subtotal_footer_separator" widget="monetary" options="{'currency_field': 'currency_id'}"/>
++
++                                <label for="amount_tax_credit" attrs="{'invisible':[('amount_tax_credit','=',0.0)]}"/>
++                                <field name="amount_tax_credit" nolabel="1" widget="monetary" options="{'currency_field': 'currency_id'}" attrs="{'invisible':[('amount_tax_credit','=',0.0)]}"/>
++                                <label for="amount_tax_payable" attrs="{'invisible':[('amount_tax_payable','=',0.0)]}"/>
++                                <field name="amount_tax_payable" nolabel="1" widget="monetary" options="{'currency_field': 'currency_id'}" attrs="{'invisible':[('amount_tax_payable','=',0.0)]}"/>
+                             </group>
+                             <div class="oe_clear"/>
+                             <field name="notes" class="oe_inline" placeholder="Terms and conditions..."/>

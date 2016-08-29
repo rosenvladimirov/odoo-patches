@@ -1,0 +1,26 @@
+diff --git a/addons/account/account_view.xml b/addons/account/account_view.xml
+index 7665373..262d2b7 100644
+--- a/addons/account/account_view.xml
++++ b/addons/account/account_view.xml
+@@ -1001,16 +1001,20 @@
+                                 <label for="type"/>
+                                 <div>
+                                     <field name="type"/>
+-                                    <field name="amount" attrs="{'invisible':[('type','in',('none', 'code', 'balance'))]}"/>
++                                    <field name="amount" attrs="{'invisible':[('type','in',('none', 'code', 'balance', 'separate'))]}"/>
+                                 </div>
+                                 <field name="python_compute" attrs="{'invisible':[('type','!=','code')],'required':[('type','=','code')]}"/>
+                                 <field name="python_compute_inv" attrs="{'invisible':[('type','!=','code')],'required':[('type','=','code')]}"/>
+                                 <field name="price_include"/>
++                                <field name="tax_parent_sign"/>
++                                <field name="tax_conditional"/>
+                             </group>
+                             <group string="Misc">
+                                 <field name="sequence"/>
+                                 <field name="include_base_amount"/>
+                                 <field name="child_depend"/>
++                                <field name="tax_credit_payable"/>
++                                <field name="account_separate" readonly="True" invisible="1"/>
+                             </group>
+                             <group string="Invoices">
+                                   <field name="account_collected_id" domain="[('type','&lt;&gt;','view'),('type','&lt;&gt;','consolidation')]"/>

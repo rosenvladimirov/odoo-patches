@@ -1,0 +1,270 @@
+diff --git a/addons/account/account.py b/addons/account/account.py
+index 0c32aea..e058eda 100644
+--- a/addons/account/account.py
++++ b/addons/account/account.py
+@@ -1318,6 +1318,7 @@ class account_move(osv.osv):
+         if not valid_moves:
+             raise osv.except_osv(_('Error!'), _('You cannot validate a non-balanced entry.\nMake sure you have configured payment terms properly.\nThe latest payment term line should be of the "Balance" type.'))
+         obj_sequence = self.pool.get('ir.sequence')
++        _logger.info("post valid_moves: %s" % valid_moves)
+         for move in self.browse(cr, uid, valid_moves, context=context):
+             if move.name =='/':
+                 new_name = False
+@@ -1552,6 +1553,10 @@ class account_move(osv.osv):
+             # makes sure we don't use outdated period
+             obj_move_line._update_journal_check(cr, uid, journal.id, move.period_id.id, context=context)
+             for line in move.line_id:
++#                if line.account_separate:
++#                    continue
++                dtct = line.debit - line.credit
++                _logger.info("action move validate line: %s" % dtct)
+                 amount += line.debit - line.credit
+                 line_ids.append(line.id)
+                 if line.state=='draft':
+@@ -1600,6 +1605,7 @@ class account_move(osv.osv):
+                                 'tax_code_id': code,
+                                 'tax_amount': amount
+                             }, context=context, check=False)
++                    _logger.info("Validate account line.tax_code_id %s: line.tax_amount %s: code %s: amount %s: centralisation %s:" % (line.tax_code_id, line.tax_amount, code, amount, journal.centralisation))
+             elif journal.centralisation:
+                 # If the move is not balanced, it must be centralised...
+ 
+@@ -1628,6 +1634,7 @@ class account_move(osv.osv):
+             obj_move_line.create_analytic_lines(cr, uid, [line.id for line in record.line_id], context)
+ 
+         valid_moves = [move.id for move in valid_moves]
++        _logger.info("valid_moves -> %s" % valid_moves)
+         return len(valid_moves) > 0 and valid_moves or False
+ 
+ 
+@@ -1881,7 +1888,7 @@ class account_tax(osv.osv):
+         'sequence': fields.integer('Sequence', required=True, help="The sequence field is used to order the tax lines from the lowest sequences to the higher ones. The order is important if you have a tax with several tax children. In this case, the evaluation order is important."),
+         'amount': fields.float('Amount', required=True, digits_compute=get_precision_tax(), help="For taxes of type percentage, enter % ratio between 0-1."),
+         'active': fields.boolean('Active', help="If the active field is set to False, it will allow you to hide the tax without removing it."),
+-        'type': fields.selection( [('percent','Percentage'), ('fixed','Fixed Amount'), ('none','None'), ('code','Python Code'), ('balance','Balance')], 'Tax Type', required=True,
++        'type': fields.selection( [('percent','Percentage'), ('fixed','Fixed Amount'), ('none','None'), ('code','Python Code'), ('balance','Balance'), ('separate', 'Separate movement')], 'Tax Type', required=True,
+             help="The computation method for the tax amount."),
+         'applicable_type': fields.selection( [('true','Always'), ('code','Given by Python Code')], 'Applicability', required=True,
+             help="If not applicable (computed through a Python code), the tax won't appear on the invoice."),
+@@ -1896,6 +1903,10 @@ class account_tax(osv.osv):
+         'python_compute':fields.text('Python Code'),
+         'python_compute_inv':fields.text('Python Code (reverse)'),
+         'python_applicable':fields.text('Applicable Code'),
++        'tax_parent_sign': fields.float('Parent Tax Sign', help="Usually 1 or -1.", digits_compute=get_precision_tax()),
++        'tax_credit_payable': fields.selection( [('taxcredit','Tax credit receivable from the taxpayer'), ('taxpay','Tax payable by the taxpayer'), ('taxadvpay','Tax payable by the taxpayer when Imports from outside EU'), ('taxbalance', 'Account for balance of taxes')], 'Who pays tax', required=True, help="If not applicable (computed through a Python code), the tax won't appear on the invoice.Who pays the tax purchaser or seller ( for imports from outside the EU pay the buyer )"),
++        'account_separate': fields.boolean(string='Separate movement', default=False),
++        'tax_conditional': fields.boolean(string='Tax under condition', default=False),
+ 
+         #
+         # Fields used for the Tax declaration
+@@ -1997,6 +2008,8 @@ class account_tax(osv.osv):
+         'ref_tax_sign': 1,
+         'ref_base_sign': 1,
+         'tax_sign': 1,
++        'tax_parent_sign': 0,
++        'tax_credit_payable': 'taxpay',
+         'base_sign': 1,
+         'include_base_amount': False,
+         'company_id': _default_company,
+@@ -2015,10 +2028,12 @@ class account_tax(osv.osv):
+                 res.append(tax)
+         return res
+ 
+-    def _unit_compute(self, cr, uid, taxes, price_unit, product=None, partner=None, quantity=0):
++    def _unit_compute(self, cr, uid, taxes, price_unit, product=None, partner=None, quantity=0, parents=[], separate=False):
+         taxes = self._applicable(cr, uid, taxes, price_unit ,product, partner)
+         res = []
+         cur_price_unit=price_unit
++        obj_precision = self.pool.get('decimal.precision')
++        prec = obj_precision.precision_get(cr, uid, 'Account')
+         for tax in taxes:
+             # we compute the amount for the current tax object and append it to the result
+             data = {'id':tax.id,
+@@ -2032,39 +2047,72 @@ class account_tax(osv.osv):
+                     'sequence': tax.sequence,
+                     'base_sign': tax.base_sign,
+                     'tax_sign': tax.tax_sign,
++                    'tax_parent_sign': tax.tax_parent_sign,
++                    'account_separate': tax.account_separate,
++                    'child_depend': tax.child_depend,
+                     'ref_base_sign': tax.ref_base_sign,
+                     'ref_tax_sign': tax.ref_tax_sign,
+                     'price_unit': cur_price_unit,
+                     'tax_code_id': tax.tax_code_id.id,
+                     'ref_tax_code_id': tax.ref_tax_code_id.id,
++                    'tax_credit_payable': tax.tax_credit_payable,
+             }
+             res.append(data)
++            if tax.child_depend:
++                tax_amount = 0.0
++            else:            
++                tax_amount = tax.amount
++#            _logger.info("Info compute child_depend: %s tax_parent_sign: %s account_separate: %s" % (tax.child_depend, tax.tax_parent_sign, tax.account_separate))
+             if tax.type=='percent':
+-                amount = cur_price_unit * tax.amount
++                amount = cur_price_unit * tax_amount
+                 data['amount'] = amount
+-
++                data['account_separate'] = False
+             elif tax.type=='fixed':
+-                data['amount'] = tax.amount
++                data['amount'] = tax_amount
+                 data['tax_amount']=quantity
++                data['account_separate'] = False
+                # data['amount'] = quantity
+             elif tax.type=='code':
+                 localdict = {'price_unit':cur_price_unit, 'product':product, 'partner':partner, 'quantity': quantity}
+                 eval(tax.python_compute, localdict, mode="exec", nocopy=True)
+                 amount = localdict['result']
+                 data['amount'] = amount
+-            elif tax.type=='balance':
++                data['account_separate'] = False
++            elif (tax.type=='balance' and separate == False):
+                 data['amount'] = cur_price_unit - reduce(lambda x,y: y.get('amount',0.0)+x, res, 0.0)
+                 data['balance'] = cur_price_unit
+-
++                data['account_separate'] = False
++            elif (tax.type=='balance' and separate == True):
++                data['amount'] = 0.0            
++                data['balance'] = True
++            elif tax.type=='separate':
++                data['amount'] = 0.0
++                data['account_separate'] = True
++#           Force update child configurations
++            if parents:
++                data['account_separate'] = parents['account_separate']         
++            _logger.info("Taxes calculations: type: %s child_depend: %s separate: %s balanse: %s cur_price_unit: %s amount: %s" % (tax.type, tax.child_depend, tax.account_separate, data.get('balance', 0.0), cur_price_unit, data.get('amount', 0.0)))   
+             amount2 = data.get('amount', 0.0)
+             if tax.child_ids:
+                 if tax.child_depend:
+                     latest = res.pop()
+-                amount = amount2
+-                child_tax = self._unit_compute(cr, uid, tax.child_ids, amount, product, partner, quantity)
+-                res.extend(child_tax)
++                amount =  tax.type=='separate' and cur_price_unit or amount2
++                child_tax = self._unit_compute(cr, uid, tax.child_ids, amount, product, partner, quantity, latest, (tax.type=='separate'))
+                 for child in child_tax:
+-                    amount2 += child.get('amount', 0.0)
++                    amount2 += round(child.get('amount', 0.0)*child.get('tax_parent_sign', 0.0), prec)
++                    _logger.info("calculate %s -> %s: sign: %s" % (amount2, child.get('amount', 0.0), child.get('tax_parent_sign', 0.0)))
++                if tax.type=='separate':
++                    balansed = False
++                    for inx, child in enumerate(child_tax, start=0):
++                        if child.get('balance', False):
++                            balansed = True
++                            break
++                    if balansed:
++                        child_tax[inx]['amount'] = round(amount2, prec)
++                        child_tax[inx]['balance'] = child_tax[inx]['amount']
++                        amount2 -= child_tax[inx]['amount']
++                    _logger.info("separated %s -> %s: %s" % (amount2, inx, child_tax[inx]))
++                res.extend(child_tax)
+                 if tax.child_depend:
+                     for r in res:
+                         for name in ('base','ref_base'):
+@@ -2124,7 +2172,8 @@ class account_tax(osv.osv):
+                 tin.append(tax)
+         tin = self.compute_inv(cr, uid, tin, price_unit, quantity, product=product, partner=partner, precision=tax_compute_precision)
+         for r in tin:
+-            totalex -= r.get('amount', 0.0)
++            totalex -= r.get('amount', 0.0)*r.get('tax_parent_sign', 0.0)
++#	    _logger.info("Compute tax excluded up amount %s, parent:%s, sing:%s end:%s" % (r.get('amount', 0.0), r.get('tax_parent_sign'), r.get('tax_sign'), totalex))
+         totlex_qty = 0.0
+         try:
+             totlex_qty = totalex/quantity
+@@ -2132,7 +2181,8 @@ class account_tax(osv.osv):
+             pass
+         tex = self._compute(cr, uid, tex, totlex_qty, quantity, product=product, partner=partner, precision=tax_compute_precision)
+         for r in tex:
+-            totalin += r.get('amount', 0.0)
++            totalin += r.get('amount', 0.0)*r.get('tax_parent_sign', 0.0)
++#	    _logger.info("Compute tax included up code:%s amount:%s, parent:%s, sing:%s, end:%s" % (r.get('name'), r.get('amount', 0.0), r.get('tax_parent_sign'), r.get('tax_sign'), totalin))
+         return {
+             'total': totalex,
+             'total_included': totalin,
+@@ -2163,11 +2213,13 @@ class account_tax(osv.osv):
+         res = self._unit_compute(cr, uid, taxes, price_unit, product, partner, quantity)
+         total = 0.0
+         for r in res:
+-            if r.get('balance',False):
++            if (r.get('balance',False) and r.get('account_separate', False)==False):
+                 r['amount'] = round(r.get('balance', 0.0) * quantity, precision) - total
+             else:
++#    		_logger.info("_Compute before tax amount %s, parent:%s, quantity:%s" % (r.get('amount', 0.0), r.get('tax_parent_sign'), quantity))
+                 r['amount'] = round(r.get('amount', 0.0) * quantity, precision)
+                 total += r['amount']
++#    		_logger.info("_Compute tax name:%s amount:%s, parent:%s, quantity:%s" % (r.get('name', 0.0), r.get('amount', 0.0), r.get('tax_parent_sign'), quantity))
+         return res
+ 
+     def _fix_tax_included_price(self, cr, uid, price, prod_taxes, line_taxes):
+@@ -2206,9 +2258,12 @@ class account_tax(osv.osv):
+                 localdict = {'price_unit':cur_price_unit, 'product':product, 'partner':partner}
+                 eval(tax.python_compute_inv, localdict, mode="exec", nocopy=True)
+                 amount = localdict['result']
+-            elif tax.type=='balance':
++            elif (tax.type=='balance' and tax.account_separate == False):
+                 amount = cur_price_unit - reduce(lambda x,y: y.get('amount',0.0)+x, res, 0.0)
+ 
++            elif tax.type=='separate':
++                amount = reduce(lambda x,y: y.get('amount',0.0)+x, res, 0.0)
++
+             if tax.include_base_amount:
+                 cur_price_unit -= amount
+                 todo = 0
+@@ -2228,11 +2283,15 @@ class account_tax(osv.osv):
+                 'sequence': tax.sequence,
+                 'base_sign': tax.base_sign,
+                 'tax_sign': tax.tax_sign,
++                'tax_parent_sign': tax.tax_parent_sign,
++                'account_separate': tax.account_separate,
++                'child_depend': tax.child_depend,
+                 'ref_base_sign': tax.ref_base_sign,
+                 'ref_tax_sign': tax.ref_tax_sign,
+                 'price_unit': cur_price_unit,
+                 'tax_code_id': tax.tax_code_id.id,
+                 'ref_tax_code_id': tax.ref_tax_code_id.id,
++                'tax_credit_payable': tax.tax_credit_payable,
+             })
+             if tax.child_ids:
+                 if tax.child_depend:
+@@ -2241,7 +2300,7 @@ class account_tax(osv.osv):
+ 
+             parent_tax = self._unit_compute_inv(cr, uid, tax.child_ids, amount, product, partner)
+             res.extend(parent_tax)
+-
++    	    _logger.info("_Compute_inv tax name:%s, amount:%s==%s, parent:%s, tax_parent_tot:%s" % (tax.get('name'), tax.get('amount', 0.0), amount, tax.get('tax_parent_sign'), tax_parent_tot))
+         total = 0.0
+         for r in res:
+             if r['todo']:
+@@ -2273,6 +2332,13 @@ class account_tax(osv.osv):
+                 total += r['amount']
+         return res
+ 
++    def onchange_type_tax_use(self, cr, uid, ids, type_tax_use, tax_credit_payable, context=None):
++        val = tax_credit_payable
++        if (type_tax_use == 'sale' or tax_credit_payable == 'taxcredit'):
++            val = 'taxpay'
++        if (type_tax_use == 'purchase' and not tax_credit_payable == 'taxadvpay'):
++            val = 'taxcredit'
++        return {'value':{'tax_credit_payable': val}}
+ 
+ # ---------------------------------------------------------
+ # Account Entries Models
+@@ -2827,6 +2893,8 @@ class account_tax_template(osv.osv):
+         'python_compute':fields.text('Python Code'),
+         'python_compute_inv':fields.text('Python Code (reverse)'),
+         'python_applicable':fields.text('Applicable Code'),
++        'tax_parent_sign': fields.float('Parent Tax Sign', help="Usually 1 or -1."),
++        'tax_credit_payable': fields.selection( [('taxcredit','Tax credit receivable from the taxpayer'), ('taxpay','Tax payable by the taxpayer (or Imports from outside EU)')], 'Who pays tax', required=True, help="If not applicable (computed through a Python code), the tax won't appear on the invoice.Who pays the tax purchaser or seller ( for imports from outside the EU pay the buyer )"),
+ 
+         #
+         # Fields used for the Tax declaration
+@@ -2915,6 +2983,8 @@ class account_tax_template(osv.osv):
+                 'tax_code_id': tax.tax_code_id and ((tax.tax_code_id.id in tax_code_template_ref) and tax_code_template_ref[tax.tax_code_id.id]) or False,
+                 'base_sign': tax.base_sign,
+                 'tax_sign': tax.tax_sign,
++                'tax_parent_sign': tax.tax_parent_sign,
++                'tax_credit_payable': tax.tax_credit_payable,
+                 'ref_base_code_id': tax.ref_base_code_id and ((tax.ref_base_code_id.id in tax_code_template_ref) and tax_code_template_ref[tax.ref_base_code_id.id]) or False,
+                 'ref_tax_code_id': tax.ref_tax_code_id and ((tax.ref_tax_code_id.id in tax_code_template_ref) and tax_code_template_ref[tax.ref_tax_code_id.id]) or False,
+                 'ref_base_sign': tax.ref_base_sign,

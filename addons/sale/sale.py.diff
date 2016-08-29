@@ -1,0 +1,25 @@
+diff --git a/addons/sale/sale.py b/addons/sale/sale.py
+index 9ca0a33..8e1736e 100644
+--- a/addons/sale/sale.py
++++ b/addons/sale/sale.py
+@@ -46,15 +46,17 @@ class sale_order(osv.osv):
+     }
+ 
+     def _amount_line_tax(self, cr, uid, line, context=None):
+-        val = 0.0
++        val = val_payable = 0.0
+         line_obj = self.pool['sale.order.line']
+         price = line_obj._calc_line_base_price(cr, uid, line, context=context)
+         qty = line_obj._calc_line_quantity(cr, uid, line, context=context)
+         for c in self.pool['account.tax'].compute_all(
+                 cr, uid, line.tax_id, price, qty, line.product_id,
+                 line.order_id.partner_id)['taxes']:
+-            val += c.get('amount', 0.0)
+-        return val
++            val += c.get('amount', 0.0)*c.get('tax_parent_sign', 0.0) if c.get('tax_credit_payable') == 'taxcredit' else 0.0
++            val_payable += c.get('amount', 0.0)*c.get('tax_parent_sign', 0.0) if c.get('tax_credit_payable') == 'taxpay' else 0.0
++#           val_tax_advpayable += c.get('amount', 0.0)*c.get('tax_parent_sign', 0.0) if c.get('tax_credit_payable') == 'taxadvpay' else 0.0
++        return val+val_payable
+ 
+     def _amount_all_wrapper(self, cr, uid, ids, field_name, arg, context=None):
+         """ Wrapper because of direct method passing as parameter for function fields """
