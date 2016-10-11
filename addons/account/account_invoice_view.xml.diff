@@ -1,8 +1,17 @@
 diff --git a/addons/account/account_invoice_view.xml b/addons/account/account_invoice_view.xml
-index 0a52580..d3f1061 100644
+index 0a52580..c4ab7f7 100644
 --- a/addons/account/account_invoice_view.xml
 +++ b/addons/account/account_invoice_view.xml
-@@ -228,6 +228,11 @@
+@@ -57,6 +57,8 @@
+                             </div>
+                             <field name="price_unit"/>
+                             <field name="discount" groups="sale.group_discount_per_so_line"/>
++                            <field name="diff_price_vat" invisible='1'/>
++                            <field name="price_unit_vat" attrs="{'invisible': [('diff_price_vat', '=', False)]}"/>
+                         </group>
+                         <group>
+                             <field domain="[('company_id', '=', parent.company_id), ('journal_id', '=', parent.journal_id), ('type', '&lt;&gt;', 'view')]" name="account_id" on_change="onchange_account_id(product_id, parent.partner_id, parent.type, parent.fiscal_position,account_id)" groups="account.group_account_user"/>
+@@ -228,6 +230,11 @@
  
                                  <field name="residual" widget="monetary" options="{'currency_field': 'currency_id'}"/>
                                  <field name="reconciled" invisible="1"/>

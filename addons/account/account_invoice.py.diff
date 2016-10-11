@@ -1,5 +1,5 @@
 diff --git a/addons/account/account_invoice.py b/addons/account/account_invoice.py
-index 97c4685..fb5cc57 100644
+index 97c4685..be53248 100644
 --- a/addons/account/account_invoice.py
 +++ b/addons/account/account_invoice.py
 @@ -19,6 +19,7 @@
@@ -19,12 +19,11 @@ index 97c4685..fb5cc57 100644
  # mapping invoice type to journal type
  TYPE2JOURNAL = {
      'out_invoice': 'sale',
-@@ -64,7 +67,17 @@ class account_invoice(models.Model):
+@@ -64,7 +67,15 @@ class account_invoice(models.Model):
      @api.depends('invoice_line.price_subtotal', 'tax_line.amount')
      def _compute_amount(self):
          self.amount_untaxed = sum(line.price_subtotal for line in self.invoice_line)
 -        self.amount_tax = sum(line.amount for line in self.tax_line)
-+#        self.amount_tax = sum(line.amount*line.tax_parent_sign for line in self.tax_line)
 +        self.amount_tax_credit = 0.0
 +        self.amount_tax_payable = 0.0
 +        tax_advpayable = 0.0
@@ -32,13 +31,12 @@ index 97c4685..fb5cc57 100644
 +            self.amount_tax_credit += line.amount*line.tax_parent_sign if line.tax_credit_payable == 'taxcredit' else 0
 +            self.amount_tax_payable += line.amount*line.tax_parent_sign if line.tax_credit_payable == 'taxpay' else 0
 +            tax_advpayable += line.amount*line.tax_parent_sign if line.tax_credit_payable == 'taxadvpay' else 0
-+#            _logger.info("Get amount_tax_payable: %i and mode: %s" % (self.amount_tax_payable, line.tax_credit_payable))
 +        self.amount_tax = self.amount_tax_payable + self.amount_tax_credit
 +        self.amount_tax_payable += tax_advpayable
          self.amount_total = self.amount_untaxed + self.amount_tax
  
      @api.model
-@@ -121,20 +134,28 @@ class account_invoice(models.Model):
+@@ -121,10 +132,15 @@ class account_invoice(models.Model):
      # the residual amount between all invoice)
      def _compute_residual(self):
          self.residual = 0.0
@@ -46,7 +44,6 @@ index 97c4685..fb5cc57 100644
          # Each partial reconciliation is considered only once for each invoice it appears into,
          # and its residual amount is divided by this number of invoices
          partial_reconciliations_done = []
-+        _logger.info("_compute_residual %s:" % self.sudo().move_id.line_id)
          for line in self.sudo().move_id.line_id:
 +            _logger.info("account_id.type: %s line.reconcile_partial_id: %s self.residual: %s" % (line.account_id.type, line.reconcile_partial_id.id, self.residual))
 +            if line.account_separate:
@@ -55,27 +52,7 @@ index 97c4685..fb5cc57 100644
              if line.account_id.type not in ('receivable', 'payable'):
                  continue
              if line.reconcile_partial_id and line.reconcile_partial_id.id in partial_reconciliations_done:
-                 continue
-+            _logger.info("after account_id.type: %s line.reconcile_partial_id: %s partial_reconciliations_done: %s" % (line.account_id.type, line.reconcile_partial_id.id, partial_reconciliations_done))
-             # Get the correct line residual amount
-             if line.currency_id == self.currency_id:
-                 line_amount = line.amount_residual_currency if line.currency_id else line.amount_residual
-             else:
-                 from_currency = line.company_id.currency_id.with_context(date=line.date)
-                 line_amount = from_currency.compute(line.amount_residual, self.currency_id)
-+            _logger.info("line_amount: %s" % (line_amount))
-             # For partially reconciled lines, split the residual amount
-             if line.reconcile_partial_id:
-                 partial_reconciliation_invoices = set()
-@@ -144,6 +165,7 @@ class account_invoice(models.Model):
-                 line_amount = self.currency_id.round(line_amount / len(partial_reconciliation_invoices))
-                 partial_reconciliations_done.append(line.reconcile_partial_id.id)
-             self.residual += line_amount
-+        _logger.info("self.residual: %s line_amount: %s" % (self.residual, residual_s))
-         self.residual = max(self.residual, 0.0)
- 
-     @api.one
-@@ -161,6 +183,7 @@ class account_invoice(models.Model):
+@@ -161,6 +177,7 @@ class account_invoice(models.Model):
          data_lines = self.move_id.line_id.filtered(lambda l: l.account_id == self.account_id)
          partial_lines = self.env['account.move.line']
          for data_line in data_lines:
@@ -83,7 +60,16 @@ index 97c4685..fb5cc57 100644
              if data_line.reconcile_id:
                  lines = data_line.reconcile_id.line_id
              elif data_line.reconcile_partial_id:
-@@ -269,6 +292,10 @@ class account_invoice(models.Model):
+@@ -194,7 +211,7 @@ class account_invoice(models.Model):
+         readonly=True, states={'draft': [('readonly', False)]})
+     supplier_invoice_number = fields.Char(string='Supplier Invoice Number',
+         help="The reference of this invoice as provided by the supplier.",
+-        readonly=True, states={'draft': [('readonly', False)]})
++        required=False, readonly=True, states={'draft': [('readonly', False),('required',True)]})
+     type = fields.Selection([
+             ('out_invoice','Customer Invoice'),
+             ('in_invoice','Supplier Invoice'),
+@@ -269,6 +286,10 @@ class account_invoice(models.Model):
          store=True, readonly=True, compute='_compute_amount', track_visibility='always')
      amount_tax = fields.Float(string='Tax', digits=dp.get_precision('Account'),
          store=True, readonly=True, compute='_compute_amount')
@@ -94,7 +80,7 @@ index 97c4685..fb5cc57 100644
      amount_total = fields.Float(string='Total', digits=dp.get_precision('Account'),
          store=True, readonly=True, compute='_compute_amount')
  
-@@ -696,7 +723,7 @@ class account_invoice(models.Model):
+@@ -696,7 +717,7 @@ class account_invoice(models.Model):
          return True
  
      @api.multi
@@ -103,7 +89,7 @@ index 97c4685..fb5cc57 100644
          """ finalize_invoice_move_lines(move_lines) -> move_lines
  
              Hook method to be overridden in additional modules to verify and
-@@ -705,7 +732,7 @@ class account_invoice(models.Model):
+@@ -705,7 +726,7 @@ class account_invoice(models.Model):
              :param move_lines: list of dictionaries with the account.move.lines (as for create())
              :return: the (possibly updated) final move_lines to create for this invoice
          """
@@ -112,7 +98,7 @@ index 97c4685..fb5cc57 100644
  
      @api.multi
      def check_tax_lines(self, compute_taxes):
-@@ -736,6 +763,8 @@ class account_invoice(models.Model):
+@@ -736,6 +757,8 @@ class account_invoice(models.Model):
          total = 0
          total_currency = 0
          for line in invoice_move_lines:
@@ -121,7 +107,7 @@ index 97c4685..fb5cc57 100644
              if self.currency_id != company_currency:
                  currency = self.currency_id.with_context(date=self.date_invoice or fields.Date.context_today(self))
                  line['currency_id'] = currency.id
-@@ -753,6 +782,9 @@ class account_invoice(models.Model):
+@@ -753,6 +776,9 @@ class account_invoice(models.Model):
              else:
                  total -= line['price']
                  total_currency -= line['amount_currency'] or line['price']
@@ -131,7 +117,7 @@ index 97c4685..fb5cc57 100644
          return total, total_currency, invoice_move_lines
  
      def inv_line_characteristic_hashcode(self, invoice_line):
-@@ -817,7 +849,7 @@ class account_invoice(models.Model):
+@@ -817,7 +843,7 @@ class account_invoice(models.Model):
              # check if taxes are all computed
              compute_taxes = account_invoice_tax.compute(inv.with_context(lang=inv.partner_id.lang))
              inv.check_tax_lines(compute_taxes)
@@ -140,7 +126,7 @@ index 97c4685..fb5cc57 100644
              # I disabled the check_total feature
              if self.env.user.has_group('account.group_supplier_inv_check_total'):
                  if inv.type in ('in_invoice', 'in_refund') and abs(inv.check_total - inv.amount_total) >= (inv.currency_id.rounding / 2.0):
-@@ -835,7 +867,9 @@ class account_invoice(models.Model):
+@@ -835,7 +861,9 @@ class account_invoice(models.Model):
                      raise except_orm(_('Error!'), _("Cannot create the invoice.\nThe related payment term is probably misconfigured as it gives a computed amount greater than the total invoiced amount. In order to avoid rounding issues, the latest line of your payment term must be of type 'balance'."))
  
              # one move line per tax line
@@ -151,7 +137,7 @@ index 97c4685..fb5cc57 100644
  
              if inv.type in ('in_invoice', 'in_refund'):
                  ref = inv.reference
-@@ -845,7 +879,11 @@ class account_invoice(models.Model):
+@@ -845,7 +873,11 @@ class account_invoice(models.Model):
              diff_currency = inv.currency_id != company_currency
              # create one move line for the total and possibly adjust the other lines amount
              total, total_currency, iml = inv.with_context(ctx).compute_invoice_totals(company_currency, ref, iml)
@@ -164,7 +150,7 @@ index 97c4685..fb5cc57 100644
              name = inv.supplier_invoice_number or inv.name or '/'
              totlines = []
              if inv.payment_term:
-@@ -886,52 +924,88 @@ class account_invoice(models.Model):
+@@ -886,52 +918,88 @@ class account_invoice(models.Model):
                      'ref': ref
                  })
  
@@ -279,7 +265,7 @@ index 97c4685..fb5cc57 100644
          self._log_event()
          return True
  
-@@ -941,13 +1015,23 @@ class account_invoice(models.Model):
+@@ -941,13 +1009,23 @@ class account_invoice(models.Model):
  
      @api.model
      def line_get_convert(self, line, part, date):
@@ -305,7 +291,7 @@ index 97c4685..fb5cc57 100644
              'account_id': line['account_id'],
              'analytic_lines': line.get('analytic_lines', []),
              'amount_currency': line['price']>0 and abs(line.get('amount_currency', False)) or -abs(line.get('amount_currency', False)),
-@@ -959,6 +1043,7 @@ class account_invoice(models.Model):
+@@ -959,6 +1037,7 @@ class account_invoice(models.Model):
              'product_id': line.get('product_id', False),
              'product_uom_id': line.get('uos_id', False),
              'analytic_account_id': line.get('account_analytic_id', False),
@@ -313,7 +299,23 @@ index 97c4685..fb5cc57 100644
          }
  
      @api.multi
-@@ -1235,6 +1320,7 @@ class account_invoice_line(models.Model):
+@@ -1222,11 +1301,13 @@ class account_invoice_line(models.Model):
+     _order = "invoice_id,sequence,id"
+ 
+     @api.one
+-    @api.depends('price_unit', 'discount', 'invoice_line_tax_id', 'quantity',
++    @api.depends('price_unit', 'price_unit_vat', 'diff_price_vat', 'discount', 'invoice_line_tax_id', 'quantity',
+         'product_id', 'invoice_id.partner_id', 'invoice_id.currency_id')
+     def _compute_price(self):
+         price = self.price_unit * (1 - (self.discount or 0.0) / 100.0)
+-        taxes = self.invoice_line_tax_id.compute_all(price, self.quantity, product=self.product_id, partner=self.invoice_id.partner_id)
++        price_vat = (self.diff_price_vat and self.price_unit_vat > price) and self.price_unit_vat or False
++        _logger.info("_compute_price %s:" % self.diff_price_vat)
++        taxes = self.invoice_line_tax_id.compute_all(price, self.quantity, product=self.product_id, partner=self.invoice_id.partner_id, price_unit_vat=price_vat)
+         self.price_subtotal = taxes['total']
+         if self.invoice_id:
+             self.price_subtotal = self.invoice_id.currency_id.round(self.price_subtotal)
+@@ -1235,6 +1316,7 @@ class account_invoice_line(models.Model):
      def _default_price_unit(self):
          if not self._context.get('check_total'):
              return 0
@@ -321,9 +323,17 @@ index 97c4685..fb5cc57 100644
          total = self._context['check_total']
          for l in self._context.get('invoice_line', []):
              if isinstance(l, (list, tuple)) and len(l) >= 3 and l[2]:
-@@ -1247,7 +1333,10 @@ class account_invoice_line(models.Model):
-                     tax_res = taxes.compute_all(price, vals.get('quantity'),
-                         product=vals.get('product_id'), partner=self._context.get('partner_id'))
+@@ -1242,12 +1324,16 @@ class account_invoice_line(models.Model):
+                 price = vals.get('price_unit', 0) * (1 - vals.get('discount', 0) / 100.0)
+                 total = total - (price * vals.get('quantity'))
+                 taxes = vals.get('invoice_line_tax_id')
++                price_vat = (vals.get('diff_price_vat', False) and vals.get('price_unit_vat', 0) > price) and vals.get('price_unit_vat', 0) or False
+                 if taxes and len(taxes[0]) >= 3 and taxes[0][2]:
+                     taxes = self.env['account.tax'].browse(taxes[0][2])
+-                    tax_res = taxes.compute_all(price, vals.get('quantity'),
+-                        product=vals.get('product_id'), partner=self._context.get('partner_id'))
++                    tax_res = taxes.compute_all(price_vat, vals.get('quantity'),
++                        product=vals.get('product_id'), partner=self._context.get('partner_id'), price_unit_vat=price_vat)
                      for tax in tax_res['taxes']:
 -                        total = total - tax['amount']
 +                        amount_tax_credit += tax['amount']*tax['tax_parent_sign'] if tax['tax_credit_payable'] == 'taxcredit' else 0
@@ -333,15 +343,30 @@ index 97c4685..fb5cc57 100644
          return total
  
      @api.model
-@@ -1423,6 +1512,7 @@ class account_invoice_line(models.Model):
-         for line in inv.invoice_line:
-             mres = self.move_line_get_item(line)
+@@ -1278,6 +1364,8 @@ class account_invoice_line(models.Model):
+     price_unit = fields.Float(string='Unit Price', required=True,
+         digits= dp.get_precision('Product Price'),
+         default=_default_price_unit)
++    price_unit_vat = fields.Float(string='Unit Price for VAT', required=True, digits_compute= dp.get_precision('Product Price'), readonly=True, states={'draft': [('readonly', False)]})
++    diff_price_vat = fields.Boolean(string='is have VAT price', help="If unchecked, it will allow to work with two price one for sale/purchase and one for VAT calculations.")
+     price_subtotal = fields.Float(string='Amount', digits= dp.get_precision('Account'),
+         store=True, readonly=True, compute='_compute_price')
+     quantity = fields.Float(string='Quantity', digits= dp.get_precision('Product Unit of Measure'),
+@@ -1425,9 +1513,10 @@ class account_invoice_line(models.Model):
              mres['invl_id'] = line.id
-+            _logger.info("Line id: %s account id: %s price: %s " % (mres['invl_id'], mres['account_id'], mres['price']))
              res.append(mres)
              tax_code_found = False
-             taxes = line.invoice_line_tax_id.compute_all(
-@@ -1439,6 +1529,8 @@ class account_invoice_line(models.Model):
+-            taxes = line.invoice_line_tax_id.compute_all(
+-                (line.price_unit * (1.0 - (line.discount or 0.0) / 100.0)),
+-                line.quantity, line.product_id, inv.partner_id)['taxes']
++            price = (line.price_unit * (1.0 - (line.discount or 0.0) / 100.0))
++            price_vat = line.price_unit_vat if (line.diff_price_vat and line.price_unit_vat > price) else False
++            _logger.info("Line id: %s account id: %s price: %s: %s: %s:" % (mres['invl_id'], mres['account_id'], mres['price'], line.diff_price_vat, line.price_unit_vat))
++            taxes = line.invoice_line_tax_id.compute_all(price, line.quantity, line.product_id, inv.partner_id, price_unit_vat=price_vat)['taxes']
+             for tax in taxes:
+                 if inv.type in ('out_invoice', 'in_invoice'):
+                     tax_code_id = tax['base_code_id']
+@@ -1439,6 +1528,8 @@ class account_invoice_line(models.Model):
                  if tax_code_found:
                      if not tax_code_id:
                          continue
@@ -350,7 +375,7 @@ index 97c4685..fb5cc57 100644
                      res.append(dict(mres))
                      res[-1]['price'] = 0.0
                      res[-1]['account_analytic_id'] = False
-@@ -1448,7 +1540,7 @@ class account_invoice_line(models.Model):
+@@ -1448,7 +1539,7 @@ class account_invoice_line(models.Model):
  
                  res[-1]['tax_code_id'] = tax_code_id
                  res[-1]['tax_amount'] = currency.compute(tax_amount, company_currency)
@@ -359,7 +384,7 @@ index 97c4685..fb5cc57 100644
          return res
  
      @api.model
-@@ -1504,8 +1596,15 @@ class account_invoice_tax(models.Model):
+@@ -1504,8 +1595,15 @@ class account_invoice_tax(models.Model):
      account_id = fields.Many2one('account.account', string='Tax Account',
          required=True, domain=[('type', 'not in', ['view', 'income', 'closed'])])
      account_analytic_id = fields.Many2one('account.analytic.account', string='Analytic account')
@@ -375,7 +400,18 @@ index 97c4685..fb5cc57 100644
      manual = fields.Boolean(string='Manual', default=True)
      sequence = fields.Integer(string='Sequence',
          help="Gives the sequence order when displaying a list of invoice tax.")
-@@ -1559,6 +1658,9 @@ class account_invoice_tax(models.Model):
+@@ -1551,14 +1649,17 @@ class account_invoice_tax(models.Model):
+         currency = invoice.currency_id.with_context(date=invoice.date_invoice or fields.Date.context_today(invoice))
+         company_currency = invoice.company_id.currency_id
+         for line in invoice.invoice_line:
+-            taxes = line.invoice_line_tax_id.compute_all(
+-                (line.price_unit * (1 - (line.discount or 0.0) / 100.0)),
+-                line.quantity, line.product_id, invoice.partner_id)['taxes']
++            price = (line.price_unit * (1 - (line.discount or 0.0) / 100.0))
++            price_vat =  (line.diff_price_vat and line.price_unit_vat > price) and line.price_unit_vat or False
++            taxes = line.invoice_line_tax_id.compute_all(price, line.quantity, line.product_id, invoice.partner_id, price_unit_vat=price_vat)['taxes']
+             for tax in taxes:
+                 val = {
                      'invoice_id': invoice.id,
                      'name': tax['name'],
                      'amount': tax['amount'],
@@ -385,17 +421,17 @@ index 97c4685..fb5cc57 100644
                      'manual': False,
                      'sequence': tax['sequence'],
                      'base': currency.round(tax['price_unit'] * line['quantity']),
-@@ -1600,7 +1702,8 @@ class account_invoice_tax(models.Model):
+@@ -1600,7 +1701,8 @@ class account_invoice_tax(models.Model):
              t['amount'] = currency.round(t['amount'])
              t['base_amount'] = currency.round(t['base_amount'])
              t['tax_amount'] = currency.round(t['tax_amount'])
 -
-+    	    _logger.info("tax_grouped detail amount:%s base:%s tax:%s sign:%s" % (t['amount'], t['base_amount'], t['tax_amount'], t['tax_parent_sign']))
-+	    _logger.info("tax_grouped amount:%s base:%s tax:%s" % (tax_grouped[key]['amount'], tax_grouped[key]['base_amount'], tax_grouped[key]['tax_amount']))
++            _logger.info("tax_grouped detail amount:%s base:%s tax:%s sign:%s" % (t['amount'], t['base_amount'], t['tax_amount'], t['tax_parent_sign']))
++        # _logger.info("tax_grouped amount:%s base:%s tax:%s" % (tax_grouped[key]['amount'], tax_grouped[key]['base_amount'], tax_grouped[key]['tax_amount']))
          return tax_grouped
  
      @api.v7
-@@ -1610,26 +1713,39 @@ class account_invoice_tax(models.Model):
+@@ -1610,26 +1712,39 @@ class account_invoice_tax(models.Model):
          return account_invoice_tax.compute(recs, invoice)
  
      @api.model
